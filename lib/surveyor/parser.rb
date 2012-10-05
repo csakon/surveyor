@@ -84,6 +84,7 @@ class Survey < ActiveRecord::Base
     context.delete_if{|k,v| true }
     context[:question_references] = {}
     context[:answer_references] = {}
+    context[:bad_references] = {}
 
     # build and set context
     title = args[0]
@@ -219,9 +220,17 @@ class DependencyCondition < ActiveRecord::Base
   def resolve_references
     if context_reference
       # Looking up references to questions and answers for linking the dependency objects
-      Surveyor::Parser.rake_trace( (self.question = context_reference[:question_references][question_reference]) ? "found question:#{question_reference} " : "lost! question:#{question_reference} ")
+      if (self.question = context_reference[:question_references][question_reference])
+        Surveyor::Parser.rake_trace("found q:#{question_reference} ")
+      else
+        Surveyor::Parser.rake_trace("lost! q:#{question_reference} ")
+      end
       context_reference[:answer_references][question_reference] ||= {}
-      Surveyor::Parser.rake_trace( (self.answer = context_reference[:answer_references][question_reference][answer_reference]) ? "found answer:#{answer_reference} " : "lost! answer:#{answer_reference} ")
+      if (self.answer = context_reference[:answer_references][question_reference][answer_reference])
+        Surveyor::Parser.rake_trace( "found answer:#{answer_reference} ")
+      else
+        Surveyor::Parser.rake_trace( "lost! answer:#{answer_reference} ")
+      end
     end
   end
 end

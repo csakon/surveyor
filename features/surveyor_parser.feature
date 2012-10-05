@@ -311,7 +311,8 @@ Feature: Survey parser
     """
     Then there should be 1 question with a correct answer
 
-  Scenario: Parsing errors
+  @focus
+  Scenario: Parsing typos in blocks
     Given the survey
     """
       survey "Basics" do
@@ -321,3 +322,25 @@ Feature: Survey parser
 
     """
     Then the parser should fail with "Dropping the Sectionals block like it's hot!"
+
+  @focus
+  Scenario: Parsing bad references
+    Given the survey
+    """
+      survey "Refs" do
+        section "Bad" do
+          q_watch "Do you watch football?"
+          a_1 "Yes"
+          a_2 "No"
+
+          q "Do you like the replacement refs?"
+          dependency :rule => "A or B"
+          condition_A :q_1, "==", :a_1
+          condition_B :q_1, "==", :b_1
+          a_1 "Yes"
+          a_2 "No"
+        end
+      end
+
+    """
+    Then the parser should fail with "Bad references:"
