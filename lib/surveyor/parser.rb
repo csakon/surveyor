@@ -46,9 +46,10 @@ module Surveyor
         self.instance_eval(&block)
         if type == 'survey'
           Surveyor::Parser.rake_trace "\n"
-          Surveyor::Parser.rake_trace context[type.to_sym].save ? "saved. " : " not saved! #{context[type.to_sym].errors.each_full{|x| x }.join(", ")} "
+          Surveyor::Parser.rake_trace context[:survey].save ? "saved. " : " not saved! #{context[type.to_sym].errors.each_full{|x| x }.join(", ")} "
+        else
+          context[type.to_sym].clear(context)
         end
-        context[type.to_sym].clear(context) unless type == 'survey'
       end
     end
 
@@ -77,24 +78,35 @@ end
 
 # Surveyor models with extra parsing methods
 class Survey < ActiveRecord::Base
-  # block
+  attr_accessor :context_reference
+  attr_accessible :context_reference
 
+  # block
+  after_save :report_lost_and_duplicate_references
   def self.parse_and_build(context, args, original_method, reference_identifier)
     # clear context
     context.delete_if{|k,v| true }
     context[:question_references] = {}
     context[:answer_references] = {}
-    context[:bad_references] = {}
+    context[:bad_references] = []
+    context[:duplicate_references] = []
 
     # build and set context
     title = args[0]
     context[:survey] = new({  :title => title,
+                              :context_reference => context,
                               :reference_identifier => reference_identifier }.merge(args[1] || {}))
   end
   def clear(context)
     context.delete_if{|k,v| true }
     context[:question_references] = {}
     context[:answer_references] = {}
+    context[:bad_references] = []
+    context[:duplicate_references] = []
+  end
+  def report_lost_and_duplicate_references
+    raise Surveyor::ParserError, "Bad references: #{context_reference[:bad_references].join("; ")}" unless context_reference[:bad_references].empty?
+    raise Surveyor::ParserError, "Duplicate references: #{context_reference[:duplicate_references].join("; ")}" unless context_reference[:duplicate_references].empty?
   end
 end
 class SurveySection < ActiveRecord::Base
@@ -102,7 +114,7 @@ class SurveySection < ActiveRecord::Base
 
   def self.parse_and_build(context, args, original_method, reference_identifier)
     # clear context
-    context.delete_if{|k,v| !%w(survey question_references answer_references).map(&:to_sym).include?(k)}
+    context.delete_if{|k,v| !%w(survey question_references answer_references bad_references duplicate_references).map(&:to_sym).include?(k)}
 
     # build and set context
     title = args[0]
@@ -110,7 +122,7 @@ class SurveySection < ActiveRecord::Base
                                                                  :display_order => context[:survey].sections.size }.merge(args[1] || {}))
   end
   def clear(context)
-    context.delete_if{|k,v| !%w(survey question_references answer_references).map(&:to_sym).include?(k)}
+    context.delete_if{|k,v| !%w(survey question_references answer_references bad_references duplicate_references).map(&:to_sym).include?(k)}
   end
 end
 class QuestionGroup < ActiveRecord::Base
@@ -118,7 +130,7 @@ class QuestionGroup < ActiveRecord::Base
 
   def self.parse_and_build(context, args, original_method, reference_identifier)
     # clear context
-    context.delete_if{|k,v| !%w(survey survey_section question_references answer_references).map(&:to_sym).include?(k)}
+    context.delete_if{|k,v| !%w(survey survey_section question_references answer_references bad_references duplicate_references).map(&:to_sym).include?(k)}
 
     # build and set context
     context[:question_group] = context[:question_group] = new({  :text => args[0] || "Question Group",
@@ -126,7 +138,7 @@ class QuestionGroup < ActiveRecord::Base
 
   end
   def clear(context)
-    context.delete_if{|k,v| !%w(survey survey_section question_references answer_references).map(&:to_sym).include?(k)}
+    context.delete_if{|k,v| !%w(survey survey_section question_references answer_references bad_references duplicate_references).map(&:to_sym).include?(k)}
   end
 end
 class Question < ActiveRecord::Base
@@ -153,7 +165,10 @@ class Question < ActiveRecord::Base
       :display_order => context[:survey_section].questions.size }.merge(args[1] || {}))
 
     # keep reference for dependencies
-    context[:question_references][reference_identifier] = context[:question] unless reference_identifier.blank?
+    unless reference_identifier.blank?
+      context[:duplicate_references].push "q_#{reference_identifier}" if context[:question_references].has_key?(reference_identifier)
+      context[:question_references][reference_identifier] = context[:question]
+    end
 
     # add grid answers
     if context[:question_group] && context[:question_group].display_type == "grid"
@@ -221,15 +236,19 @@ class DependencyCondition < ActiveRecord::Base
     if context_reference
       # Looking up references to questions and answers for linking the dependency objects
       if (self.question = context_reference[:question_references][question_reference])
-        Surveyor::Parser.rake_trace("found q:#{question_reference} ")
+        Surveyor::Parser.rake_trace("found q_#{question_reference} ")
       else
-        Surveyor::Parser.rake_trace("lost! q:#{question_reference} ")
+        Surveyor::Parser.rake_trace("lost q_#{question_reference}! ")
+        context_reference[:bad_references].push "q_#{question_reference}"
       end
-      context_reference[:answer_references][question_reference] ||= {}
-      if (self.answer = context_reference[:answer_references][question_reference][answer_reference])
-        Surveyor::Parser.rake_trace( "found answer:#{answer_reference} ")
-      else
-        Surveyor::Parser.rake_trace( "lost! answer:#{answer_reference} ")
+      unless answer_reference.blank?
+        context_reference[:answer_references][question_reference] ||= {}
+        if (self.answer = context_reference[:answer_references][question_reference][answer_reference])
+          Surveyor::Parser.rake_trace( "found a_#{answer_reference} ")
+        else
+          Surveyor::Parser.rake_trace( "lost a_#{answer_reference}!")
+          context_reference[:bad_references].push "q_#{question_reference}, a_#{answer_reference}"
+        end
       end
     end
   end
@@ -251,8 +270,16 @@ class Answer < ActiveRecord::Base
       context[:grid_answers] << context[:answer]
     else
       context[:answer] = context[:question].answers.build({:display_order => context[:question].answers.size}.merge(attrs))
-      context[:answer_references][context[:question].reference_identifier] ||= {} unless context[:question].reference_identifier.blank?
-      context[:answer_references][context[:question].reference_identifier][reference_identifier] = context[:answer] unless reference_identifier.blank? or context[:question].reference_identifier.blank?
+
+    # keep reference for dependencies
+    unless context[:question].reference_identifier.blank? or reference_identifier.blank?
+      context[:answer_references][context[:question].reference_identifier] ||= {}
+      context[:duplicate_references].push "q_#{context[:question].reference_identifier}, a_#{reference_identifier}" if context[:answer_references][context[:question].reference_identifier].has_key?(reference_identifier)
+      context[:answer_references][context[:question].reference_identifier][reference_identifier] = context[:answer]
+    end
+
+
+
     end
   end
   def self.parse_args(args)

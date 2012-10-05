@@ -311,7 +311,6 @@ Feature: Survey parser
     """
     Then there should be 1 question with a correct answer
 
-  @focus
   Scenario: Parsing typos in blocks
     Given the survey
     """
@@ -323,24 +322,46 @@ Feature: Survey parser
     """
     Then the parser should fail with "Dropping the Sectionals block like it's hot!"
 
-  @focus
   Scenario: Parsing bad references
     Given the survey
     """
       survey "Refs" do
         section "Bad" do
-          q_watch "Do you watch football?"
+          q_watch "Do you watch football?", :pick => :one
           a_1 "Yes"
           a_2 "No"
 
-          q "Do you like the replacement refs?"
+          q "Do you like the replacement refs?", :pick => :one
           dependency :rule => "A or B"
           condition_A :q_1, "==", :a_1
-          condition_B :q_1, "==", :b_1
-          a_1 "Yes"
-          a_2 "No"
+          condition_B :q_watch, "==", :b_1
+          a "Yes"
+          a "No"
         end
       end
 
     """
-    Then the parser should fail with "Bad references:"
+    Then the parser should fail with "Bad references: q_1; q_1, a_1; q_watch, a_b_1"
+
+  Scenario: Parsing repeated references
+    Given the survey
+    """
+      survey "Refs" do
+        section "Bad" do
+          q_watch "Do you watch football?", :pick => :one
+          a_1 "Yes"
+          a_1 "No"
+
+          q_watch "Do you watch baseball?", :pick => :one
+          a_yes "Yes"
+          a_no  "No"
+
+          q "Do you like the replacement refs?", :pick => :one
+          dependency :rule => "A or B"
+          condition_A :q_watch, "==", :a_1
+          a "Yes"
+          a "No"
+        end
+      end
+    """
+    Then the parser should fail with "Duplicate references: q_watch, a_1; q_watch"
