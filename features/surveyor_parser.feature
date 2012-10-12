@@ -3,6 +3,7 @@ Feature: Survey parser
   I want to write out the survey in the DSL
   So that I can give it to survey participants
 
+  @focus
   Scenario: Parsing basic questions
     Given I parse
     """
